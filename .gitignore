@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.ruff_cache/
+.DS_Store
+*.png
+!assets/*.png
+debug.png
+debug_screenshot.png
+screenshot.png
+.vscode/
+.idea/
