@@ -183,6 +183,8 @@ WORKFLOWS = {
 | `RETRY_DELAY` | 1.0s | 重试间隔 |
 | `DEFAULT_THRESHOLD` | 0.8 | 匹配阈值 |
 | `guke阈值` | 0.6 | guke图标匹配阈值 |
+| `RUN_LOOP_SLEEP_MIN` | 3分钟 | 循环间隔最小值 |
+| `RUN_LOOP_SLEEP_MAX` | 5分钟 | 循环间隔最大值 |
 
 ---
 

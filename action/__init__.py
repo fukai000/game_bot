@@ -27,36 +27,7 @@ class Action:
         self.page = page
         self.viewport_width = 1280
         self.viewport_height = 720
-
-    async def get_canvas_position(self) -> dict:
-        return await self.page.evaluate("""() => {
-            const canvas = document.querySelector('canvas');
-            if (!canvas) return null;
-            const rect = canvas.getBoundingClientRect();
-            return {
-                x: rect.x,
-                y: rect.y,
-                width: rect.width,
-                height: rect.height
-            };
-        }""")
-
-    async def smart_click(
-        self,
-        x: int,
-        y: int,
-        simulate_drag: bool = False,
-        random_offset: int = 3,
-    ):
-        offset_x = random.randint(-random_offset, random_offset)
-        offset_y = random.randint(-random_offset, random_offset)
-        final_x = x + offset_x
-        final_y = y + offset_y
-
-        if simulate_drag:
-            await self._click_with_drag(final_x, final_y)
-        else:
-            await self._native_click(final_x, final_y)
+        self.scale = 2
 
     async def _native_click(self, x: int, y: int):
         await self.page.mouse.move(x, y)
@@ -64,21 +35,23 @@ class Action:
         await self.page.mouse.up()
         logger.debug(f"Native clicked at ({x}, {y})")
 
-    async def click_with_scroll(self, screenshot_x: int, screenshot_y: int):
-        scale = 2
-        viewport_x = screenshot_x / scale
-        viewport_y = screenshot_y / scale
-
-        scroll_x = viewport_x - 200
-        scroll_y = viewport_y - 300
-
-        await self.page.evaluate(f"window.scrollTo({scroll_x}, {scroll_y})")
-        await asyncio.sleep(0.3)
-
+    async def click_with_scroll(self, x: int, y: int):
+        viewport_x = x / self.scale
+        viewport_y = y / self.scale
         await self.page.mouse.click(viewport_x, viewport_y)
-        logger.debug(
-            f"Clicked with scroll at ({screenshot_x}, {screenshot_y}) -> ({viewport_x}, {viewport_y})"
-        )
+        logger.debug(f"Clicked at ({x}, {y}) -> ({viewport_x}, {viewport_y})")
+
+    async def _native_click(self, x: int, y: int):
+        await self.page.mouse.move(x, y)
+        await self.page.mouse.down()
+        await self.page.mouse.up()
+        logger.debug(f"Native clicked at ({x}, {y})")
+
+    async def click_with_scroll(self, x: int, y: int):
+        viewport_x = x / self.scale
+        viewport_y = y / self.scale
+        await self.page.mouse.click(viewport_x, viewport_y)
+        logger.debug(f"Clicked at ({x}, {y}) -> ({viewport_x}, {viewport_y})")
 
     async def _simple_click(self, x: int, y: int):
         await self.page.evaluate(

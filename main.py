@@ -8,23 +8,24 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from core.game_bot import GameBot
+from config import (
+    SEARCH_RANGE,
+    THRESHOLDS,
+    WORKFLOW_DELAY,
+    RETRY_COUNT,
+    RETRY_DELAY,
+    RUN_LOOP_SLEEP_MIN,
+    RUN_LOOP_SLEEP_MAX,
+)
 
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-WS_URL = "ws://127.0.0.1:9222/devtools/browser/9b4703bb-a920-47b4-a489-d6ac657fb59c"
-
-
 WORKFLOWS = {
     "guke": ["guke", "zhizuo", "zhizuo2", "queding", "jiaofu", "gongxi"],
 }
-
-
-WORKFLOW_DELAY = 0.5
-RETRY_COUNT = 3
-RETRY_DELAY = 1.0
 
 
 last_command = ""
@@ -42,11 +43,16 @@ def input_with_history(prompt):
 
 
 async def click_single(bot, template_name, threshold=0.3, retry_count=RETRY_COUNT):
+    sr = SEARCH_RANGE
     for attempt in range(retry_count + 1):
         screenshot = await bot.get_image()
-        result = bot.vision.locate(screenshot, template_name, threshold)
+        results = bot.vision.locate_all(screenshot, template_name, threshold)
+        results = filter_results_in_range(
+            results, sr["x_min"], sr["x_max"], sr["y_min"], sr["y_max"]
+        )
 
-        if result:
+        if results:
+            result = results[0]
             x, y = clamp_click(
                 result.x + random.randint(-2, 2), result.y + random.randint(-2, 2)
             )
@@ -65,21 +71,6 @@ async def click_single(bot, template_name, threshold=0.3, retry_count=RETRY_COUN
 
     print(f"未找到: {template_name}")
     return False
-
-
-async def wait_for_template(bot, template_name, timeout=10, threshold=0.3):
-    print(f"等待 {template_name} 出现...")
-    start_time = asyncio.get_event_loop().time()
-
-    while asyncio.get_event_loop().time() - start_time < timeout:
-        screenshot = await bot.get_image()
-        result = bot.vision.locate(screenshot, template_name, threshold)
-        if result:
-            print(f"等到 {template_name}")
-            return result
-        await asyncio.sleep(0.5)
-
-    return None
 
 
 async def recover_to_huayi(bot):
@@ -114,15 +105,76 @@ def filter_results_in_range(results, x_min, x_max, y_min, y_max):
 
 
 def clamp_click(x, y):
-    return clamp(x, 200, 930), clamp(y, 180, 1450)
+    return clamp(x, SEARCH_RANGE["x_min"], SEARCH_RANGE["x_max"]), clamp(
+        y, SEARCH_RANGE["y_min"], SEARCH_RANGE["y_max"]
+    )
+
+
+async def click_single(bot, template_name, threshold=0.3, retry_count=RETRY_COUNT):
+    sr = SEARCH_RANGE
+    for attempt in range(retry_count + 1):
+        screenshot = await bot.get_image()
+        results = bot.vision.locate_all(screenshot, template_name, threshold)
+        results = filter_results_in_range(
+            results, sr["x_min"], sr["x_max"], sr["y_min"], sr["y_max"]
+        )
+
+        if results:
+            result = results[0]
+            x, y = clamp_click(
+                result.x + random.randint(-2, 2), result.y + random.randint(-2, 2)
+            )
+            print(
+                f"找到 {template_name}: ({result.x}, {result.y}), 置信度: {result.confidence:.2f}"
+            )
+            await bot.action.click_with_scroll(x, y)
+            print(f"已点击: ({x}, {y})")
+            return True
+
+        if attempt < retry_count:
+            print(
+                f"未找到 {template_name}，{RETRY_DELAY}秒后重试 ({attempt + 1}/{retry_count})..."
+            )
+            await asyncio.sleep(RETRY_DELAY)
+
+    print(f"未找到: {template_name}")
+    return False
+
+
+async def recover_to_huayi(bot):
+    print("\n=== 进入恢复模式 ===")
+
+    for attempt in range(10):
+        screenshot = await bot.get_image()
+
+        huayi_result = bot.vision.locate(screenshot, "huayi", threshold=0.6)
+        if huayi_result:
+            print(f"找到 huayi ({huayi_result.x}, {huayi_result.y})，等待恢复...")
+            await asyncio.sleep(1)
+            print("恢复完成")
+            return True
+
+        print(f"未找到 huayi ({attempt + 1}/10)，点击 (600, 280) 附近...")
+        x = clamp(
+            random.randint(595, 605), SEARCH_RANGE["x_min"], SEARCH_RANGE["x_max"]
+        )
+        y = clamp(
+            random.randint(275, 285), SEARCH_RANGE["y_min"], SEARCH_RANGE["y_max"]
+        )
+        await bot.action.click_with_scroll(x, y)
+        await asyncio.sleep(1)
+
+    print("恢复超时")
+    return False
 
 
 async def run_workflow_single(bot, templates, start_index=0):
     for i in range(start_index, len(templates)):
         name = templates[i]
-        print(f"[{i + 1}/{len(templates)}] 查找 {name}...")
+        threshold = THRESHOLDS.get(name, 0.6)
+        print(f"[{i + 1}/{len(templates)}] 查找 {name} (阈值: {threshold})...")
 
-        if await click_single(bot, name):
+        if await click_single(bot, name, threshold=threshold):
             await asyncio.sleep(WORKFLOW_DELAY)
         else:
             return False, i
@@ -137,7 +189,8 @@ async def run_workflow(bot, workflow_name):
         return
 
     templates = WORKFLOWS[workflow_name]
-    threshold = 0.6
+    threshold = THRESHOLDS.get(templates[0], 0.6)
+    sr = SEARCH_RANGE
 
     total_executed = 0
     round_num = 0
@@ -146,7 +199,9 @@ async def run_workflow(bot, workflow_name):
         round_num += 1
         screenshot = await bot.get_image()
         results = bot.vision.locate_all(screenshot, templates[0], threshold=threshold)
-        results = filter_results_in_range(results, 400, 950, 550, 1000)
+        results = filter_results_in_range(
+            results, sr["x_min"], sr["x_max"], sr["y_min"], sr["y_max"]
+        )
 
         if not results:
             if total_executed == 0:
@@ -235,6 +290,7 @@ async def main():
     await asyncio.sleep(1)
 
     print("\n=== 游戏自动化工具 ===")
+    print("点击范围: x=200-930, y=180-1450")
     print("输入 'help' 查看所有命令\n")
 
     while True:
@@ -321,6 +377,9 @@ async def main():
                 """)
                 print("已清除标记点\n")
 
+            elif action == "scale":
+                print(f"当前比例: {bot.action.scale}\n")
+
             elif action == "marker":
                 parts = arg.split()
                 if len(parts) == 2:
@@ -401,10 +460,14 @@ async def main():
 
             elif action == "run":
                 if arg:
-                    print(f"开始循环执行 {arg}，间隔 3-5 分钟 (Ctrl+C 停止)\n")
+                    print(
+                        f"开始循环执行 {arg}，间隔 {RUN_LOOP_SLEEP_MIN}-{RUN_LOOP_SLEEP_MAX} 分钟 (Ctrl+C 停止)\n"
+                    )
                     while True:
                         await run_workflow(bot, arg)
-                        interval = random.randint(180, 300)
+                        interval = random.randint(
+                            RUN_LOOP_SLEEP_MIN * 60, RUN_LOOP_SLEEP_MAX * 60
+                        )
                         print(
                             f"等待 {interval} 秒 ({interval / 60:.1f} 分钟) 后继续... (Ctrl+C 停止)"
                         )
@@ -444,6 +507,7 @@ async def main():
                 print("  click <名称>   - 点击单个图标")
                 print("  find <名称>   - 查找图标并显示位置")
                 print("  clean         - 清除标记点")
+                print("  scale         - 刷新截图比例")
                 print("  point <x> <y> - 在坐标处显示红点")
                 print("  marker <x> <y>- 在坐标处显示标记点")
                 print("  ck <x> <y>    - 点击指定坐标")
